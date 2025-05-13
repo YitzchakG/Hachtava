@@ -4,16 +4,323 @@
   <meta charset="UTF-8">
   <title>משחק מילים</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="manifest" href="manifest.json">
-  <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js')
-        .then(reg => console.log('Service worker registered:', reg))
-        .catch(err => console.error('Service worker registration failed:', err));
+  <style>
+    body {
+      direction: rtl;
+      font-family: 'Assistant', sans-serif;
+      background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+      margin: 0;
+      padding: 20px;
+      text-align: center;
     }
-  </script>
+    h1 { color: #0d47a1; }
+    input, button, select {
+      font-size: 1.2em;
+      margin: 10px;
+      padding: 10px;
+    }
+    table {
+      width: 90%;
+      margin: auto;
+      border-collapse: collapse;
+    }
+    td, th {
+      border: 1px solid #90caf9;
+      padding: 10px;
+      font-size: 1.2em;
+    }
+    .option-button {
+      display: block;
+      width: 90%;
+      margin: 10px auto;
+      padding: 15px;
+      font-size: 1.2em;
+    }
+    .correct {
+      background-color: #a5d6a7;
+    }
+    .wrong {
+      background-color: #ef9a9a;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
 </head>
 <body>
-  <h1>נא להוסיף את כל הקוד כאן</h1>
+  <h1>משחק תרגום מילים</h1>
+
+  <div id="startScreen">
+    <button onclick="location.reload()" style="position: absolute; top: 10px; left: 10px;">צא</button>
+    <label>בחר מספר זוגות מילים:
+      <input id="wordCount" type="number" min="1" max="50">
+    </label><br>
+    <button onclick="createTable()">צור טבלה</button>
+    <button onclick="location.reload()">חזור</button>
+    <hr>
+    <p>או טען רשימה שמורה:</p>
+    <button onclick="loadSavedTables()">טען רשימה</button>
+    <select id="savedLists" onchange="loadList(this.value)"></select>
+    <button onclick="deleteSelectedList()" id="deleteButton" disabled>מחק רשימה נבחרת</button>
+  </div>
+
+  <div id="gameSection" class="hidden">
+    <h2 id="question"></h2>
+    <div id="options"></div>
+  </div>
+
+  <div id="endScreen" class="hidden">
+    <h2>תוצאות המשחק:</h2>
+    <ul id="results"></ul>
+    <button id="retryButton" onclick="retryMistakes()" disabled>נסה שוב מילים שלא הצלחת</button>
+    <button onclick="location.reload()">התחל מחדש</button>
+  </div>
+
+  <audio id="correctSound" src="https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg"></audio>
+  <audio id="wrongSound" src="https://actions.google.com/sounds/v1/cartoon/cartoon_boing.ogg"></audio>
+
+  <script>
+    let allWords = [];
+    let words = [];
+    let currentIndex = 0;
+    let mistakes = [];
+    let quizDirection = "enToHe";
+
+    function createTable() {
+      const count = parseInt(document.getElementById("wordCount").value);
+      const tableSection = document.createElement("div");
+      tableSection.innerHTML = `<table id="wordTable">
+        <thead><tr><th>עברית</th><th>אנגלית</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <br>
+      <input id="saveName" type="text" placeholder="שם לרשימה">
+      <button onclick="saveWords()">שמור</button>
+      <button onclick="startGame(false)">התחל משחק</button>
+      <button onclick="location.reload()">חזור</button>
+      <button onclick="location.href=location.href">צא</button>`;
+      const tbody = tableSection.querySelector("tbody");
+      for (let i = 0; i < count; i++) {
+        const row = document.createElement("tr");
+        row.innerHTML = `<td><input></td><td><input></td>`;
+        const temp = row.children[0].innerHTML;
+        row.children[0].innerHTML = row.children[1].innerHTML;
+        row.children[1].innerHTML = temp;
+        tbody.appendChild(row);
+      }
+      document.getElementById("startScreen").replaceWith(tableSection);
+    }
+
+    function saveWords() {
+      allWords = [];
+      const rows = document.querySelectorAll("#wordTable tbody tr");
+      for (const row of rows) {
+        const he = row.children[0].firstElementChild.value.trim();
+        const en = row.children[1].firstElementChild.value.trim();
+        if (en && he) allWords.push({ en, he });
+      }
+      const name = document.getElementById("saveName")?.value.trim();
+      if (name) localStorage.setItem("wordlist_" + name, JSON.stringify(allWords));
+    }
+
+    function loadSavedTables() {
+      const select = document.getElementById("savedLists");
+      select.innerHTML = "<option disabled selected>בחר רשימה</option>";
+      for (const key in localStorage) {
+        if (key.startsWith("wordlist_")) {
+          const name = key.replace("wordlist_", "");
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          select.appendChild(option);
+        }
+      }
+    }
+
+    function loadList(name) {
+      const list = localStorage.getItem("wordlist_" + name);
+      if (!list) return;
+      allWords = JSON.parse(list);
+      words = [...allWords];
+      document.getElementById("startScreen").classList.add("hidden");
+      document.getElementById("gameSection").classList.remove("hidden");
+      showNext();
+    }
+
+    function deleteSelectedList() {
+      const name = document.getElementById("savedLists").value;
+      if (!name) return;
+      localStorage.removeItem("wordlist_" + name);
+      loadSavedTables();
+    }
+
+    function startGame(fromMistakes) {
+      if (!fromMistakes && allWords.length === 0) {
+        const rows = document.querySelectorAll("#wordTable tbody tr");
+        allWords = [];
+        for (const row of rows) {
+          const he = row.children[0].firstElementChild.value.trim();
+          const en = row.children[1].firstElementChild.value.trim();
+          if (en && he) allWords.push({ en, he });
+        }
+      }
+      words = fromMistakes && mistakes.length ? [...mistakes] : [...allWords];
+      mistakes = [];
+      currentIndex = 0;
+      document.querySelector("#wordTable")?.parentElement?.remove();
+      document.getElementById("gameSection").classList.remove("hidden");
+      showNext();
+    }
+
+    function showNext() {
+      const synth = window.speechSynthesis;
+      if (currentIndex >= words.length) return endGame();
+      const word = words[currentIndex];
+      const question = quizDirection === "enToHe" ? word.en : word.he;
+      const answer = quizDirection === "enToHe" ? word.he : word.en;
+      const options = new Set([answer]);
+      while (options.size < 3) {
+        const rand = allWords[Math.floor(Math.random() * allWords.length)];
+        const opt = quizDirection === "enToHe" ? rand.he : rand.en;
+        options.add(opt);
+      }
+      const optionsArray = Array.from(options);
+      shuffle(optionsArray);
+      document.getElementById("question").textContent = question;
+      if (quizDirection === "enToHe") {
+        const utter = new SpeechSynthesisUtterance(question);
+        utter.lang = "en-US";
+        synth.speak(utter);
+      }
+      const container = document.getElementById("options");
+      container.innerHTML = "";
+      optionsArray.forEach(opt => {
+        const btn = document.createElement("button");
+        btn.textContent = opt;
+        btn.className = "option-button";
+        btn.onclick = () => checkAnswer(opt, answer, btn);
+        container.appendChild(btn);
+      });
+    }
+
+    function checkAnswer(selected, correct, button) {
+      const correctSound = document.getElementById("correctSound");
+      const wrongSound = document.getElementById("wrongSound");
+      const isCorrect = selected === correct;
+
+      if (isCorrect) {
+        button.classList.add("correct");
+        correctSound.play();
+      } else {
+        button.classList.add("wrong");
+        wrongSound.play();
+        mistakes.push(words[currentIndex]);
+      }
+
+      Array.from(document.querySelectorAll(".option-button")).forEach(btn => btn.disabled = true);
+      setTimeout(() => {
+        currentIndex++;
+        showNext();
+      }, 1500);
+    }
+
+    function endGame() {
+      document.getElementById("gameSection").classList.add("hidden");
+      document.getElementById("endScreen").classList.remove("hidden");
+      const resultList = document.getElementById("results");
+      resultList.innerHTML = "";
+
+      document.getElementById("retryButton").disabled = mistakes.length === 0;
+
+      const total = words.length;
+      const failed = mistakes.length;
+      const passed = total - failed;
+
+      const summary = document.createElement("li");
+      summary.textContent = `הצלחת ${passed} מתוך ${total} מילים.`;
+      summary.style.fontWeight = "bold";
+      summary.style.marginBottom = "20px";
+      resultList.appendChild(summary);
+
+      const percentage = (passed / total) * 100;
+      let praise = "";
+      if (percentage === 100) praise = "🏅 מדליית זהב! כל הכבוד!";
+      else if (percentage >= 90) praise = "🥈 מדליית כסף! מצוין!";
+      else if (percentage >= 80) praise = "🥉 מדליית ארד! כל הכבוד!";
+
+      if (praise) {
+        const medal = document.createElement("li");
+        medal.style.fontSize = "1.2em";
+        medal.style.color = "#0d47a1";
+        medal.style.marginTop = "10px";
+
+        
+
+        const caption = document.createElement("div");
+        caption.textContent = praise;
+        medal.appendChild(caption);
+
+        resultList.appendChild(medal);
+      }
+
+      if (failed > 0 && words.length === allWords.length) {
+        const title = document.createElement("div");
+        title.textContent = "מילים שלא הצלחת:";
+        title.style.textDecoration = "underline";
+        title.style.fontWeight = "bold";
+        title.style.marginBottom = "10px";
+        resultList.appendChild(title);
+
+        const table = document.createElement("table");
+        const thead = document.createElement("thead");
+        const headerRow = document.createElement("tr");
+        const th1 = document.createElement("th");
+        th1.textContent = "עברית";
+        const th2 = document.createElement("th");
+        th2.textContent = "אנגלית";
+        headerRow.appendChild(th1);
+        headerRow.appendChild(th2);
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement("tbody");
+        for (const w of mistakes) {
+          const row = document.createElement("tr");
+          const td1 = document.createElement("td");
+          const td2 = document.createElement("td");
+          if (quizDirection === "enToHe") {
+            td1.textContent = w.he;
+            td2.textContent = w.en;
+          } else {
+            td1.textContent = w.en;
+            td2.textContent = w.he;
+          }
+          row.appendChild(td1);
+          row.appendChild(td2);
+          tbody.appendChild(row);
+        }
+        table.appendChild(tbody);
+        resultList.appendChild(table);
+      }
+    }
+
+    function retryMistakes() {
+      if (mistakes.length === 0) return;
+      const retryWords = [...mistakes];
+      mistakes = [];
+      words = retryWords;
+      currentIndex = 0;
+      document.getElementById("endScreen").classList.add("hidden");
+      document.getElementById("gameSection").classList.remove("hidden");
+      showNext();
+    }
+
+    function shuffle(array) {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+    }
+  </script>
 </body>
 </html>
